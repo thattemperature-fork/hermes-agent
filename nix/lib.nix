@@ -29,6 +29,7 @@
   python3,
   # pm/lock.json pins, used for node and npm.
   pmPackages,
+  nodejs_26,
 }:
 let
   repoRoot = ./..;
@@ -36,34 +37,39 @@ let
   # Every JS tool comes from pm/lock.json — the node the builds and the
   # shipped app run on, plus npm wrapped onto it. nixpkgs supplies nothing
   # here; node/npm have Linux artifacts in the lock.
-  pmNode = pmPackages.node;
+  pmNode = nodejs_26;
   npm12 = callPackage ./npm-pinned.nix { nodejs = pmNode; };
   node_gyp_11_4_0 = callPackage ./node-gyp-11-4-0.nix { nodejs = nodejs; };
   # bin/npm and bin/npx are the pinned npm; the rest of the tree (node,
   # include/node headers, lib/node_modules/node's own bundled npm) is the
   # pinned node. A plain symlinkJoin cannot express that: both paths carry
   # bin/npm, so assemble it explicitly.
-  nodejs = (runCommand "nodejs-26-npm-12" {
-    # buildNpmPackage reads nodejs.meta.platforms; the pm derivation carries no
-    # meta, and the lock has artifacts for every platform.
-    meta = {
-      platforms = lib.platforms.all;
-      mainProgram = "node";
+  nodejs =
+    (runCommand "nodejs-26-npm-12"
+      {
+        # buildNpmPackage reads nodejs.meta.platforms; the pm derivation carries no
+        # meta, and the lock has artifacts for every platform.
+        meta = {
+          platforms = lib.platforms.all;
+          mainProgram = "node";
+        };
+      }
+      ''
+        cp -rs ${pmNode} $out
+        # cp -r copies the store's read-only directory modes; make the farm's own
+        # directories writable so bin/npm and bin/npx can be replaced. Only real
+        # directories are chmodded, never the symlink targets.
+        find $out -type d -exec chmod u+w {} +
+        rm -f $out/bin/npm $out/bin/npx
+        ln -s ${npm12}/bin/npm $out/bin/npm
+        ln -s ${npm12}/bin/npx $out/bin/npx
+      ''
+    )
+    // {
+      # buildNpmPackage puts nodejs.python (its build interpreter) on the npm
+      # hook's PATH; the pm node derivation has no such attribute.
+      python = python3;
     };
-  } ''
-    cp -rs ${pmNode} $out
-    # cp -r copies the store's read-only directory modes; make the farm's own
-    # directories writable so bin/npm and bin/npx can be replaced. Only real
-    # directories are chmodded, never the symlink targets.
-    find $out -type d -exec chmod u+w {} +
-    rm -f $out/bin/npm $out/bin/npx
-    ln -s ${npm12}/bin/npm $out/bin/npm
-    ln -s ${npm12}/bin/npx $out/bin/npx
-  '') // {
-    # buildNpmPackage puts nodejs.python (its build interpreter) on the npm
-    # hook's PATH; the pm node derivation has no such attribute.
-    python = python3;
-  };
 
   # Patched hook: just a new derivation that copies and patches the script
   patchedNpmConfigHook = runCommand "npm-config-hook-patched" { } ''
